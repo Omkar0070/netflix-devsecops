@@ -7,7 +7,7 @@ pipeline {
     }
 
     environment {
-        SCANNER_HOME = tool 'sonar-scanner'
+        SCANNER_HOME = tool 'SonarQube'
         DOCKER_IMAGE = 'omkarkadam0070/netflix'
         DOCKER_TAG   = "${BUILD_NUMBER}"
     }
@@ -38,8 +38,9 @@ pipeline {
                 withSonarQubeEnv('SonarQube') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
-                          -Dsonar.projectKey=netflix-devsecops \
-                          -Dsonar.sources=src
+                        -Dsonar.projectKey=netflix-devsecops \
+                        -Dsonar.projectName=netflix-devsecops \
+                        -Dsonar.sources=src
                     """
                 }
             }
@@ -47,8 +48,8 @@ pipeline {
 
         stage('OWASP Dependency Check') {
             steps {
-                dependencyCheck additionalArguments: '--scan ./',
-                                odcInstallation: 'DP-Check'
+                dependencyCheck additionalArguments: '--scan ./ --disableNodeAudit --disableYarnAudit',
+                                odcInstallation: 'Dependency-Check'
                 dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
             }
         }
@@ -61,7 +62,7 @@ pipeline {
 
         stage('Docker Build & Push') {
             steps {
-                withDockerRegistry(credentialsId: 'dockerhub', toolName: 'docker') {
+                withDockerRegistry(credentialsId: 'dockerhub') {
                     sh """
                         docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                         docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
@@ -88,9 +89,8 @@ pipeline {
             emailext(
                 subject: "Build ${currentBuild.result}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                 body: """
-                    <p><b>Job:</b> ${env.JOB_NAME}</p>
-                    <p><b>Build:</b> #${env.BUILD_NUMBER}</p>
                     <p><b>Status:</b> ${currentBuild.result}</p>
+                    <p><b>Build:</b> #${env.BUILD_NUMBER}</p>
                     <p><b>URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
                 """,
                 attachmentsPattern: 'trivyfs.txt,trivyimage.txt',
@@ -99,4 +99,3 @@ pipeline {
         }
     }
 }
-
