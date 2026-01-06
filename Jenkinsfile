@@ -7,31 +7,23 @@ pipeline {
     }
 
     environment {
-        SCANNER_HOME = tool 'sonar-scanner'
-        DOCKER_IMAGE = 'ayushdocker2607/netflix'
-        DOCKER_TAG = "${BUILD_NUMBER}"
+        SCANNER_HOME = tool 'SonarQube'
+        DOCKER_IMAGE = 'omkarkadam0070/netflix'
+        DOCKER_TAG   = "${BUILD_NUMBER}"
     }
 
     stages {
+
         stage('Clean Workspace') {
             steps {
                 cleanWs()
             }
         }
 
-        stage('Checkout from Git') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'newbranch', url: 'https://github.com/Ayush-bhoyar/Netflix-DevSecOps-Project.git'
-            }
-        }
-
-        stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('sonar-server') {
-                    sh '''${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectName=Netflix \
-                        -Dsonar.projectKey=Netflix'''
-                }
+                git branch: 'main',
+                    url: 'https://github.com/Omkar0070/netflix-devsecops.git'
             }
         }
 
@@ -41,14 +33,36 @@ pipeline {
             }
         }
 
-        stage('OWASP FS Scan') {
+        stage('SonarQube Analysis') {
             steps {
-                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                withSonarQubeEnv('SonarQube') {
+                    sh """
+                      ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectKey=netflix-devsecops \
+                      -Dsonar.projectName=netflix-devsecops \
+                      -Dsonar.sources=src
+                    """
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableNodeAudit --disableYarnAudit',
+                                odcInstallation: 'Dependency-Check'
                 dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
             }
         }
 
-        stage('Trivy FS Scan') {
+        stage('Trivy File System Scan') {
             steps {
                 sh 'trivy fs . > trivyfs.txt'
             }
@@ -56,42 +70,26 @@ pipeline {
 
         stage('Docker Build & Push') {
             steps {
-                script {
-                    withDockerRegistry(credentialsId: 'Docker-cred', toolName: 'docker') {
-                        sh """
-                            docker build --build-arg TMDB_V3_API_KEY=9a2c05102991f80c0113ca9bc884cec3 \
-                            -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                            docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Update Kubernetes Manifest') {
-            steps {
-                script {
-                    // Update image tag in deployment.yaml using regex
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
                     sh """
-                        sed -i 's|image: ${DOCKER_IMAGE}:.*|image: ${DOCKER_IMAGE}:${DOCKER_TAG}|' Kubernetes/deployment.yml
+                      echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                      docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+                      docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
                     """
                 }
             }
         }
 
-        stage('Push Updated Manifest to GitHub') {
+        stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-cred', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
-                    script {
-                        sh """
-                            git config user.name "Jenkins CI"
-                            git config user.email "jenkins@example.com"
-                            git add Kubernetes/deployment.yml || true
-                            git commit -m "Update image tag to ${DOCKER_TAG}" || true
-                            git push https://${GIT_USER}:${GIT_PASS}@github.com/Ayush-bhoyar/Netflix-DevSecOps-Project.git newbranch || true
-                        """
-                    }
-                }
+                sh """
+                  sed -i 's|image:.*|image: ${DOCKER_IMAGE}:${DOCKER_TAG}|' netflix-k8s/deployment.yaml
+                  kubectl apply -f netflix-k8s/
+                """
             }
         }
 
@@ -105,17 +103,17 @@ pipeline {
     post {
         always {
             emailext(
-                attachLog: true,
-                subject: "Build ${currentBuild.result}: ${env.JOB_NAME} [#${env.BUILD_NUMBER}]",
+                subject: "Build ${currentBuild.result}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                 body: """
-                    <p><b>Build Result:</b> ${currentBuild.result}</p>
-                    <p><b>Project:</b> ${env.JOB_NAME}</p>
-                    <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
-                    <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                <p><b>Project:</b> Netflix DevSecOps</p>
+                <p><b>Status:</b> ${currentBuild.result}</p>
+                <p><b>Build:</b> #${env.BUILD_NUMBER}</p>
+                <p><b>URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
                 """,
-                to: 'bhoyarayush71@gmail.com',
-                attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+                attachmentsPattern: 'trivyfs.txt,trivyimage.txt',
+                to: 'kadamom815@gmail.com'
             )
         }
     }
 }
+
